@@ -1,73 +1,101 @@
-# Dynamic Central Update Mechanism with Regularization in Graph Attention Networks for Traffic Forecasting Explainability
+# Gated GAT for short-term traffic forecasting
 
+TensorFlow implementation accompanying:
 
-This is the Tensorflow implementation of ST-MetaNet-DCU with regularization in the following paper:
+> Yue Li, Shujuan Chen, Ying Jin. *Explaining spatial information flow in short-term traffic
+> forecasting models using a gated graph attention network.*
 
-- Yue Li, ShujuanChen. Dynamic Central Update Mechanism with Regularization in Graph Attention Networks for Traffic Forecasting Explainability.
+A gate is inserted at the node update of each graph attention (GAT) layer of ST-MetaNet. For every
+sensor and every time step the gate returns the share of the node update taken from neighbouring
+sensors rather than from the sensor itself. An L1 penalty on the gate withdraws neighbour
+information progressively, which gives a graded ablation whose conclusions are then checked against
+deleting the GAT layers outright and retraining.
 
----
-
-## Requirements for Reproducibility
-
-### System Requirements:
-
-- System: Windows 11 OS
-- Language: Python 3.9.18
-- Devices: a single RTX 4090 GPU
-
-
-### Library Requirements:
-
-- numpy 1.25.2
-- pandas 2.0.3
-- [TensorFlow 2.10.1](https://www.tensorflow.org/install/pip?_gl=1*1tk6s5m*_up*MQ..*_ga*MjI3MzQyMDc1LjE3MTM2OTIwNzI.*_ga_W0YLR4190T*MTcxMzY5MjA3MS4xLjAuMTcxMzY5MjA3MS4wLjAuMA..#windows-native)
-- cudatoolkit 11.2.2
-- cudnn 8.1.0.77
-- [DGL 1.1.2+cu118](https://www.dgl.ai/pages/start.html)
-- tables 3.9.1
-- holidays 0.45
-- pyymal 6.0
-- h5py 3.10.0
-
-Mannual installation is recommended for installing the dependencies. After installation, change the backend deep learning framework for dgl to tensorflow.
+Historical note on naming: the mechanism was called the Dynamic Central Update (DCU) during
+development, and `DCU` still appears in directory names, saved weights and log filenames. It is the
+same thing the paper calls the gate.
 
 ---
 
-### Data Description
-Highway trunk road traffic data are downloaded from [Highway England](http://tris.highwaysengland.co.uk/). Edge features and node features are obtained using Google Route API and Google Map.
+## Repository layout
 
-Unzip the data files in `data/data.zip`. Move the two files below under the same directory.
-- `sensor498_2019-01-01_2019-12-31.h5` is the original data downloaded.
-- `sensor498_2019-01-01_2019-12-31_imputed.h5` is the imputed data. Imputation is only performed for speed measurements when both volume and speed are 0, using the closest previous non-NA speed measurement. The script for this imputation task is in `data/imputation.ipynb`. The shape of data is (498, 35040, 2), which indicates (number of sensors, number of timestamps, number of traffic features). Speed and volume are the two traffic features.
+| Path | Contents |
+|---|---|
+| `ST-MetaNet/` | baseline, fixed scalar gate |
+| `ST-MetaNet-DCU/` | gated GAT, no penalty |
+| `ST-MetaNet-DCU-regularization/` | gated GAT with the L1 penalty on the gate |
+| `data/` | traffic data, edge and node features |
+| `param/` | trained weights, one `.h5` per penalty strength |
+| `eval/` | training and evaluation logs, one per run |
+| `interpret/rho-matrix.ipynb` | loads trained weights and extracts the gate matrix |
 
-Data for other years (2015-2023) can be downloaded from this [link](https://pan.baidu.com/s/1qey-HshcizFInAYzBhQj7g?pwd=a8va). Script of downloading using API is included.
+The three model folders differ in `graph.py`, where `MetaGAT` is modified, and additionally in
+`seq2seq.py` and `train.py` for the regularised variant, where the gate values are returned
+alongside the prediction and enter the loss.
 
-- `tris_edge_features.xlsx`: Edge features (original graph) of the highway trunk road traffic network. Two road segments do not have any valid sensor and the traffic readings are replaced with those recorded by the sensor on the other direction of the road segment, indicated with sensors id starting with '999'. The shape of edge features is (498, 10), which indicates (number of edges, number of edge features). The 10 edge features include the longitude and latitude of the sensor (2), distance of the road segment and driving duration (2), longitude and latitude of the origin and destination of the road segment (4), the number of neighbours of the origin and destination of the road segment (2).
-- `tris_node_features.csv`: Node features (original graph) of the highway trunk road traffic network. The shape of node features is (181, 2), which indicates (number of nodes, number of node features). The two features are the longitude and latitude of the nodes.
+## Requirements
 
+Python 3.9.18 on Windows 11. See `requirements.txt`. DGL must be switched to the TensorFlow
+backend after installation. Manual installation of the CUDA components is recommended.
 
-### Code Description
+## Data
 
-- `data` folder stores the data, including traffic data, edge features and node features.
-- `eval` folder stores the logs of model training and evaluation metrics, which are outputs of running the `train.py` script.
-- `interpret` folder stores the python script used to make inference using trained models. The script first establishes the model then loads existing model parameters. In this `rho-matrix.ipynb` file, predictions of four timestamps of interest are made using regularized ST-MetaNet-DCU models with different $\lambda$. During this process the $\rho$ matrix are generated and collected for further analysis.
-- `param` folder stores all trained model parameters.
-- `ST-MetaNet`, `ST-MetaNet-DCU`, and `ST-MetaNet-DCU-reg` are folders that store the source code of each model. The main difference between the first two is in the `graph.py` where `MetaGAT` is modified. The main difference between the last two is the `graph.py`, `seq2seq.py`, and `train.py` where the intermediate output $\rho$ matrix are sent together with the prediction, and then participate in the loss function definition. The regularization parameter $\lambda` is also newly defined in the `model_setting/st-metanet.yaml`, which is then passed to `train.py`.
-- `train.py` is the script for a single run of model training, which can be executed using a shell command like `python train.py --file model_setting/st-metanet.yaml --epochs 2` after `cd` to the corresponding model folder and the Python environment activated. `run.ipynb` is a script that can run multiple times of `train.py`, so that each single model with different hyperparameters can be trained consecutively.
+Unzip `data/DATA.zip` and place both files in the same directory.
 
----
+- `sensor498_2019-01-01_2019-12-31.h5`, as downloaded from
+  [National Highways TRIS](http://tris.highwaysengland.co.uk/), shape (498, 35040, 2) for
+  (sensors, timestamps, features), features being speed and volume.
+- `sensor498_2019-01-01_2019-12-31_imputed.h5`, the file the training pipeline actually reads.
+  Imputation applies to speed only, where both volume and speed are recorded as 0, and replaces the
+  speed with the closest previous non-missing value. It changes 54,025 speed cells and no volume
+  cells. The notebook is `data/imputation.ipynb`.
+- `tris_edge_features.xlsx`, shape (498, 10). Sensor longitude and latitude, segment distance and
+  driving duration, origin and destination longitude and latitude, and the neighbour count at each
+  end. Two segments carry no valid sensor and take the reading from the opposite direction, marked
+  by a sensor id beginning `999`.
+- `tris_node_features.csv`, shape (181, 2), junction longitude and latitude.
 
-## Citation
+Other years, 2015 to 2023, and the download script are linked from the release notes.
 
-If you find this repository, e.g., the code and the datasets, useful in your research, please cite our paper.
+## Running
 
-For the original Mxnet implementation of the baseline ST-MetaNet model, please refer to the [ST-MetaNet repository](https://github.com/panzheyi/ST-MetaNet) and the following paper:
+```
+cd ST-MetaNet-DCU-regularization
+python train.py --file model_setting/st-metanet.yaml --epochs 2
+```
 
-- Zheyi Pan, Yuxuan Liang, Weifeng Wang, Yong Yu, Yu Zheng, and Junbo Zhang. [Urban Traffic Prediction from Spatio-Temporal Data Using Deep Meta Learning](https://www.researchgate.net/publication/333186315_Urban_Traffic_Prediction_from_Spatio-Temporal_Data_Using_Deep_Meta_Learning). 2019. In The 25th ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD'19), August 4–8, 2019, Anchorage, AK, USA.
+`run.ipynb` runs `train.py` repeatedly to sweep the penalty strength. The penalty strength is
+`training.lambda_reg` in `model_setting/st-metanet.yaml`.
 
+## What is and is not reproducible here
 
----
+Please read this before using the repository to check a number in the paper.
+
+- **The penalty sweep is reproducible.** The sixteen penalty strengths in Table 1 come from
+  `ST-MetaNet-DCU-regularization` with `lambda_reg` set per run. The corresponding weights are in
+  `param/` and the logs in `eval/`.
+- **The four ablation variants are not included.** Removing the encoder GAT layer, the decoder GAT
+  layer, or both was done by commenting out source in place rather than by a configuration flag, so
+  Table 3 cannot be regenerated from this tree as it stands. The resulting logs are in `param/`
+  (`st-metanet-DCU-encodergat_removed.log`, `st-metanet-DCU-no_GAT.log`).
+- **`lambda_reg` in the shipped yaml is `1000000.0`**, which is not a setting used in the paper. Set
+  it explicitly for every run.
+- **Units.** The training code records volume as the mean of the constituent 15 minute counts and
+  speed as their sum. Volume must be multiplied by 4 for vehicles per hour, and speed divided by the
+  number of 15 minute periods in the aggregation interval for miles per hour. Getting this wrong is
+  the easiest mistake to make with these logs.
+- Every reported model was trained for a fixed number of updates from a single seed (`seed: 2`),
+  with no early stopping and no best-checkpoint selection. Comparisons smaller than about 4 vehicles
+  per hour are not interpretable from a single run. This is stated in the paper.
+
+## Baseline
+
+For the original MXNet implementation of ST-MetaNet see the
+[ST-MetaNet repository](https://github.com/panzheyi/ST-MetaNet) and:
+
+> Zheyi Pan, Yuxuan Liang, Weifeng Wang, Yong Yu, Yu Zheng, Junbo Zhang. Urban Traffic Prediction
+> from Spatio-Temporal Data Using Deep Meta Learning. KDD'19.
 
 ## License
 
-MIT License (refer to the LICENSE file for details).
+MIT. See `LICENSE`.

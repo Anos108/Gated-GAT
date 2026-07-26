@@ -1,0 +1,10 @@
+# Python 3.9.18. Install TensorFlow and DGL manually against your CUDA build,
+# then switch the DGL backend to tensorflow.
+numpy==1.25.2
+pandas==2.0.3
+tensorflow==2.10.1
+dgl==1.1.2
+tables==3.9.1
+holidays==0.45
+pyyaml==6.0
+h5py==3.10.0
