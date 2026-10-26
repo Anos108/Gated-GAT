@@ -139,7 +139,13 @@ def main(args):
     train_dataset, eval_dataset, test_dataset, scaler = getattr(data.dataloader, dataset_setting['dataloader'])(settings)
     
     # Optimizer setup
-    optimizer = tf.keras.optimizers.Adam(learning_rate=train_setting['lr'])
+    # Graph-layer variables can live on CPU because DGL message passing is
+    # deliberately CPU-bound. Disable optimizer XLA fusion so TensorFlow can
+    # update variables on their owning device while other ops use the GPU.
+    optimizer = tf.keras.optimizers.Adam(
+        learning_rate=train_setting['lr'],
+        jit_compile=False,
+    )
     
     # Training
     node_features, _ = get_geo_feature()

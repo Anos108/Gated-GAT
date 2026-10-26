@@ -35,7 +35,11 @@ class Graph(tf.keras.Model):
     def __init__(self, in_out, edge_feature, edge, hidden_size, **kwargs):
         super(Graph, self).__init__(**kwargs)
         self.in_out = in_out
-        self.edge_feature = tf.convert_to_tensor(edge_feature, dtype=tf.float32)
+        # DGL graph operations and all features attached to the graph stay on CPU.
+        with tf.device('/CPU:0'):
+            self.edge_feature = tf.identity(
+                tf.convert_to_tensor(edge_feature, dtype=tf.float32)
+            )
         self.edge = edge
         self.hidden_size = hidden_size
 
@@ -60,20 +64,26 @@ class Graph(tf.keras.Model):
         self.build_graph()
 
     def build_graph(self):
-        self.g = dgl.graph((self.src, self.dst), num_nodes=self.num_nodes)
-        # self.g = self.g.to("/cpu:0")
-        # self.g = dgl.DGLGraph()
-        # self.g.add_nodes(self.num_nodes) # based on index
-        # self.g.add_edges(self.src, self.dst) # form edge based on index pairs
-        # self.edge_feature = self.edge_feature.cpu()
-        self.g.edata['feature'] = self.edge_feature # add edge feature [e, d]
+        with tf.device('/CPU:0'):
+            self.g = dgl.graph((self.src, self.dst), num_nodes=self.num_nodes)
+            self.g.edata['feature'] = self.edge_feature # add edge feature [e, d]
 
     def call(self, state, feature):
-        self.g.ndata['state'] = state # add node data [n, b, t, hidden]
-        self.g.ndata['feature'] = feature # add node data [n, d]
-        self.g.update_all(self.msg_edge, self.msg_reduce) # info pass
-        state = self.g.ndata.pop('new_state') # [n, b, t, hidden]
-        rho = self.g.ndata.pop('rho')
+        # Keep DGL and its TensorFlow message/reduce callbacks on CPU. TensorFlow
+        # records the device copies, so gradients can flow back to GPU inputs and
+        # through CPU-resident graph-layer variables during training.
+        output_device = state.device or '/CPU:0'
+        with tf.device('/CPU:0'):
+            self.g.ndata['state'] = tf.identity(state) # [n, b, t, hidden]
+            self.g.ndata['feature'] = tf.identity(feature) # [n, d]
+            self.g.update_all(self.msg_edge, self.msg_reduce)
+            state = self.g.ndata.pop('new_state')
+            rho = self.g.ndata.pop('rho', None)
+
+        with tf.device(output_device):
+            state = tf.identity(state)
+            if rho is not None:
+                rho = tf.identity(rho)
         # current_time = datetime.datetime.now()
         # formatted_time = current_time.strftime('%Y%m%d-%H%M%S')
         # time.sleep(1)
@@ -101,7 +111,7 @@ class GAT(Graph):
         alpha = tf.nn.leaky_relu(tf.matmul(state, self.weight)) # [e, b, t, hidden]
 
         edge_feature = edge.data['feature']
-        while len(dist.shape) < len(alpha.shape):
+        while len(edge_feature.shape) < len(alpha.shape):
             edge_feature = tf.expand_dims(edge_feature, axis=-1)
 
         alpha = alpha * edge_feature # [e, b, t, hidden]
